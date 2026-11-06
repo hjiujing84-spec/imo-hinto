@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>まえに、ひと。| AIに聞く前に、まえに、ひと。</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <style>
   :root{
     --brand:#2563eb; --brand-dark:#1d4ed8; --bg:#f4f6fb; --surface:#ffffff;
@@ -31,7 +33,7 @@
   .card{background:var(--surface); border:1px solid var(--border); border-radius:14px;
     padding:16px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.04);}
 
-  .post-meta{font-size:11px; color:var(--sub); margin-bottom:4px; display:flex; justify-content:space-between;}
+  .post-meta{font-size:11px; color:var(--sub); margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;}
   .post-text{font-size:15px; white-space:pre-wrap; word-break:break-word;}
   .pill{display:inline-block; font-size:11px; padding:2px 10px; border-radius:999px; margin-bottom:8px;
     background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe;}
@@ -65,6 +67,9 @@
   .report-note{display:none; background:#fef2f2; border:1px solid #fecaca; color:#991b1b;
     font-size:12px; border-radius:10px; padding:10px; margin-bottom:12px;}
   .report-note.show{display:block;}
+  .conn{display:none; background:#fef2f2; border:1px solid #fecaca; color:#991b1b;
+    font-size:12px; border-radius:10px; padding:10px; margin:16px 0;}
+  .conn.show{display:block;}
 </style>
 </head>
 <body>
@@ -82,8 +87,12 @@
     <a href="https://www.wakamono-support.jp/" target="_blank" rel="noopener">10代向け24時間LINE相談(若者メンタルサポート協会)</a>
   </div>
 
+  <div class="conn" id="connErr">
+    ⚠ データベースに接続できへんみたい。管理者(Firebaseのルール期限切れの可能性)に確認してもうて。
+  </div>
+
   <div class="report-note" id="reportNote">
-    ⚠️ 通報を受け付けました(デモ版のため記録はこの端末内だけ)。運営が確認するまでは表示を控える運用です。
+    ⚠️ 通報を受け付けました。運営が確認するまでは表示を控える運用です。
   </div>
 
   <div class="tagbar" id="tagbar">
@@ -113,31 +122,38 @@
 
 </div>
 
-<footer>まえに、ひと。— 探究学習 試作品(データはこの端末内にのみ保存されます)<br>AIに聞く前に、まえに、ひと。</footer>
+<footer>まえに、ひと。— 全員の投稿はリアルタイムで共有されます(匿名・300文字まで)<br>AIに聞く前に、まえに、ひと。</footer>
 
 <script>
-const LS_KEY = "maenihito_posts_v1";
+// ===== Firebase 初期化 =====
+const firebaseConfig = {
+  apiKey: "AIzaSyDyTbes_hmuDA_iHtq2kh6L_tV1NMJnBcs",
+  authDomain: "maeni-hito-de24d.firebaseapp.com",
+  databaseURL: "https://maeni-hito-de24d-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "maeni-hito-de24d",
+  storageBucket: "maeni-hito-de24d.firebasestorage.app",
+  messagingSenderId: "445274958070",
+  appId: "1:445274958070:web:f23203ebfe62163891a4d7",
+  measurementId: "G-LPHC9L5B58"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
 
-const seed = [
-  {id:1, tag:"受験", text:"模試の結果が悪くて、AIに勉強法聞いてばかり。でもなんか人に話を聞いてもらったほうが元気が出る気がして…",
-   listen:12, talk:3, time:"10分前", replies:[{who:"匿名リスナー", text:"結果より、今日ここに来たこと自体がすごいと思うよ。", time:"5分前"}]},
-  {id:2, tag:"家族", text:"親に進路で反対されて、AIに話すだけじゃ解消しなかった。だれかただ聞いてほしい。",
-   listen:27, talk:8, time:"1時間前", replies:[]},
-  {id:3, tag:"友達関係", text:"友達にAIの答えをそのまま送りすぎて、最近自分の言葉で話せなくて怖い。「まえに、ひと。」を自分ルールにしてみようと思う。",
-   listen:9, talk:5, time:"昨日", replies:[]}
-];
-
-function load(){
-  try{ const d = JSON.parse(localStorage.getItem(LS_KEY)); if(Array.isArray(d) && d.length) return d; }catch(e){}
-  localStorage.setItem(LS_KEY, JSON.stringify(seed));
-  return seed.slice();
-}
-function save(){ localStorage.setItem(LS_KEY, JSON.stringify(posts)); }
-
-let posts = load();
+let posts = [];
 let filter = "すべて";
 
-function esc(s){ return s.replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m])); }
+// 自分が押した投稿を覚えておく(連打防止・端末内のみ)
+const VOTED_KEY = "maenihito_voted_v1";
+function loadVoted(){ try{ return JSON.parse(localStorage.getItem(VOTED_KEY)) || {}; }catch(e){ return {}; } }
+function saveVoted(v){ localStorage.setItem(VOTED_KEY, JSON.stringify(v)); }
+let voted = loadVoted();
+
+function esc(s){ return String(s).replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m])); }
+function fmtTime(ts){
+  if(!ts) return "";
+  const d = new Date(ts);
+  return d.toLocaleString("ja-JP", {month:"numeric", day:"numeric", hour:"numeric", minute:"2-digit"});
+}
 
 function render(){
   const list = document.getElementById("list");
@@ -147,23 +163,33 @@ function render(){
 
   if(!shown.length){ list.innerHTML = '<div class="empty">まだ投稿がありません。最初の投稿になろう!</div>'; return; }
 
-  list.innerHTML = shown.map(p => `
+  list.innerHTML = shown.map(p => {
+    const replies = p.replies ? Object.values(p.replies) : [];
+    const replyList = replies.length
+      ? replies.map(r=>`<div class="reply"><small>匿名リスナー ・ ${esc(fmtTime(r.createdAt))}</small>${esc(r.text)}</div>`).join("")
+      : '<div class="reply" style="color:var(--sub)">まだ返信がありません。最初のリスナーになろう。</div>';
+    const iVoted = !!voted[p.id];
+    return `
     <div class="card">
-      <div class="post-meta"><span>匿名さん ・ ${esc(p.time)}</span><span>🛡 <button class="btn btn-report" style="margin:0;padding:2px 8px;" onclick="report(${p.id})">通報</button></span></div>
+      <div class="post-meta">
+        <span>匿名さん ・ ${esc(fmtTime(p.createdAt))}</span>
+        <span><button class="btn btn-report" style="margin:0;padding:2px 8px;" onclick="report('${esc(p.id)}')">通報</button></span>
+      </div>
       <span class="pill">#${esc(p.tag)}</span>
       <div class="post-text">${esc(p.text)}</div>
       <div class="actions">
-        <button class="btn ${p.listened?'on-listen':''}" onclick="toggleListen(${p.id})">👂 聞くよ ×${p.listen}${p.listened?'(済)':''}</button>
-        <button class="btn ${p.talked?'on-talk':''}" onclick="toggleTalk(${p.id})">💬 話していい? ×${p.talk}${p.talked?'(済)':''}</button>
+        <button class="btn ${voted['L_'+p.id]?'on-listen':''}" onclick="vote('${esc(p.id)}','listen')">👂 聞くよ ×${p.listen||0}</button>
+        <button class="btn ${voted['T_'+p.id]?'on-talk':''}" onclick="vote('${esc(p.id)}','talk')">💬 話していい? ×${p.talk||0}</button>
       </div>
       <div class="replies">
-        ${p.replies.map(r=>`<div class="reply"><small>${esc(r.who)} ・ ${esc(r.time)}</small>${esc(r.text)}</div>`).join("") || '<div class="reply" style="color:var(--sub)">まだ返信がありません。最初のリスナーになろう。</div>'}
+        ${replyList}
         <div class="reply-form">
-          <input type="text" id="reply-${p.id}" maxlength="140" placeholder="返信を書いて送信(140文字まで)">
-          <button class="btn" onclick="addReply(${p.id})">送信</button>
+          <input type="text" id="reply-${esc(p.id)}" maxlength="140" placeholder="返信を書いて送信(140文字まで)">
+          <button class="btn" onclick="addReply('${esc(p.id)}')">送信</button>
         </div>
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 function addPost(){
@@ -171,29 +197,44 @@ function addPost(){
   const tag = document.getElementById("newTag").value;
   const text = t.value.trim();
   if(!text){ alert("なにか書いてから投稿してね"); return; }
-  posts.unshift({id:Date.now(), tag, text, listen:0, talk:0, time:"たった今", replies:[], listened:false, talked:false});
-  save(); t.value = ""; render();
-  alert("投稿できた!聞き手が見つかるまで、少しだけ待ってあげて。");
+  db.ref("posts").push({
+    tag: tag,
+    text: text,
+    listen: 0,
+    talk: 0,
+    createdAt: firebase.database.ServerValue.TIMESTAMP
+  }).then(()=>{
+    t.value = "";
+    window.scrollTo({top: document.getElementById("listTitle").offsetTop, behavior:"smooth"});
+  }).catch(err=>{
+    document.getElementById("connErr").classList.add("show");
+  });
 }
-function toggleListen(id){
-  const p = posts.find(p=>p.id===id); if(p.listened){ return; }
-  p.listen++; p.listened = true; save(); render();
+
+function vote(id, kind){
+  const key = (kind==="listen" ? "L_" : "T_") + id;
+  if(voted[key]){ alert("この投稿ではもう押してるで!"); return; }
+  const field = kind==="listen" ? "listen" : "talk";
+  db.ref(`posts/${id}/${field}`).transaction(v => (v||0)+1).then(()=>{
+    voted[key] = true; saveVoted(voted); render();
+  });
 }
-function toggleTalk(id){
-  const p = posts.find(p=>p.id===id); if(p.talked){ return; }
-  p.talk++; p.talked = true; save(); render();
-}
+
 function addReply(id){
   const input = document.getElementById("reply-"+id);
   const text = input.value.trim();
   if(!text){ alert("返信を書いてね"); return; }
-  posts.find(p=>p.id===id).replies.push({who:"匿名リスナー", text, time:"たった今"});
-  save(); render();
+  db.ref(`posts/${id}/replies`).push({
+    text: text,
+    createdAt: firebase.database.ServerValue.TIMESTAMP
+  }).then(()=>{ input.value = ""; });
 }
+
 function report(id){
   document.getElementById("reportNote").classList.add("show");
   setTimeout(()=>document.getElementById("reportNote").classList.remove("show"), 4000);
 }
+
 document.getElementById("tagbar").addEventListener("click", e=>{
   if(!e.target.classList.contains("tag")) return;
   document.querySelectorAll(".tag").forEach(t=>t.classList.remove("active"));
@@ -201,7 +242,18 @@ document.getElementById("tagbar").addEventListener("click", e=>{
   filter = e.target.dataset.tag;
   render();
 });
-render();
+
+// リアルタイム同期:誰かが投稿・返信・投票するたび全員の画面が自動更新
+db.ref("posts").on("value", (snapshot)=>{
+  const data = snapshot.val();
+  if(!data){ posts = []; } else {
+    posts = Object.entries(data).map(([id, p]) => ({ id, ...p }));
+    posts.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  }
+  render();
+}, (err)=>{
+  document.getElementById("connErr").classList.add("show");
+});
 </script>
 <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","spa":2}' crossorigin="anonymous"></script>
 </body>
